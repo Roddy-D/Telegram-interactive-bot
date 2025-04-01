@@ -73,13 +73,6 @@ python -m interactive-bot
 2. 执行`docker build -t tgibot .` 生成一个tgibot的镜像
 3. 执行`docker run --restart always --name telegram-interactive-bot  -v "$PWD":/app tgibot:latest` 生成容器并执行。
 
-# ToDoList
-- [x] 准备完善下，docker化
-- [x] 支持消息回复功能。消息间可以相互引用。
-- [x] 完善下数据库。
-- [x] 添加客户的人机识别，防止无聊的人用userbot来刷
-- [x] 添加并识别媒体组消息。
-- [x] 精简点代码，利用**payload来展开forwarding的参数。
 
 # 关于
 
@@ -91,7 +84,5 @@ python -m interactive-bot
 - 服务器推荐RackNerd的。实际上，我也确实用这个。够便宜。这款就够：[2核3G--年32刀](https://my.racknerd.com/aff.php?aff=11705&pid=905) 
 - 实在搞不定部署，可以群里找大家帮忙部署下。服务器也可以找大家共用： https://t.me/DeveloperTeamGroup 
 - 实在实在实在搞不定部署，找  [@MrMiHa](https://t.me/MrMiHa)  同学付费部署……
+- 编辑消息功能由本人(https://t.me/horrorself_bot)添加
 
-# 详细部署文档
-
-[米哈同学的知识库](https://miha.uk/docs/tutor/telegram-interactive-bot/)
