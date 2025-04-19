@@ -32,7 +32,7 @@ Telegram的开源双向机器人。避免垃圾信息
 ## 三、部署运行
 
 #### 3.1 服务器执行
-可以参考 [博客] (https://blog.922768.xyz/topicgrambot/)
+可以参考 [博客](https://blog.922768.xyz/topicgrambot/)
 
 
 #### 3.2 docker 执行
