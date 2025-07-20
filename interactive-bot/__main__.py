@@ -152,7 +152,7 @@ async def send_contact_card(
                 chat_id,
                 photo=pic,
                 # === 修改 2 & 3: 使用 user.user_id 生成文本 ===
-                caption=f"👤 {mention_html(user.user_id, user.first_name or str(user.user_id))}\n\n📱 {user.user_id}\n\n🔗 {f'@{user.username}' if user.username else f'tg://user?id={user.user_id}'}",
+                caption=f"👤 {mention_html(user.user_id, user.first_name or str(user.user_id))}\n\n📱 {user.user_id}\n\n🔗 直接联系：{f'@{user.username}' if user.username else f'tg://user?id={user.user_id}'}",
                 message_thread_id=message_thread_id,
                 parse_mode="HTML",
             )
@@ -161,7 +161,7 @@ async def send_contact_card(
             await context.bot.send_message(
                 chat_id,
                 # === 修改 4 & 5: 使用 user.user_id 生成文本 ===
-                text=f"👤 {mention_html(user.user_id, user.first_name or str(user.user_id))}\n\n📱 {user.user_id}\n\n🔗 {f'@{user.username}' if user.username else f'tg://user?id={user.user_id}'}",
+                text=f"👤 {mention_html(user.user_id, user.first_name or str(user.user_id))}\n\n📱 {user.user_id}\n\n🔗 直接联系：{f'@{user.username}' if user.username else f'tg://user?id={user.user_id}'}",
                 message_thread_id=message_thread_id,
                 parse_mode="HTML",
             )
