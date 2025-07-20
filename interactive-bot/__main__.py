@@ -1,13 +1,13 @@
 import os
 import random
 import time
-import asyncio
 from datetime import datetime, timedelta
 from string import ascii_letters as letters
 
 import httpx
 import telegram
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+# 导入常量，用于过滤器
 from telegram.constants import ChatType, UpdateType
 from telegram.error import BadRequest
 from telegram.ext import (
@@ -44,7 +44,7 @@ Base.metadata.create_all(bind=engine)
 db = SessionMaker()
 
 
-# 延时发送媒体组消息的回调
+# 延时发送媒体组消息的回调 (保持不变)
 async def _send_media_group_later(context: ContextTypes.DEFAULT_TYPE):
     job = context.job
     media_group_id = job.data
@@ -96,11 +96,12 @@ async def _send_media_group_later(context: ContextTypes.DEFAULT_TYPE):
             db.commit() # 提交数据库更改
     except BadRequest as e:
         logger.error(f"Error sending media group {media_group_id} in job {job.name}: {e}")
+        # 可以考虑在这里通知管理员或用户发送失败
     except Exception as e:
         logger.error(f"Unexpected error in _send_media_group_later for job {job.name}: {e}", exc_info=True)
 
 
-# 延时发送媒体组消息 
+# 延时发送媒体组消息 (保持不变)
 async def send_media_group_later(
     delay: float,
     chat_id,
@@ -123,7 +124,7 @@ async def send_media_group_later(
     return name
 
 
-# 更新用户数据库
+# 更新用户数据库 (保持不变)
 def update_user_db(user: telegram.User):
     if db.query(User).filter(User.user_id == user.id).first():
         return
@@ -137,19 +138,12 @@ def update_user_db(user: telegram.User):
     db.commit()
 
 
-# 发送联系人卡片
+# 发送联系人卡片 (修正版)
 async def send_contact_card(
     chat_id, message_thread_id, user: User, update: Update, context: ContextTypes
 ):
-    buttons = []
-    if user.username:
-        buttons.append(
-            [InlineKeyboardButton("👤 直接联络", url=f"https://t.me/{user.username}")]
-        )
-    reply_markup = InlineKeyboardMarkup(buttons) if buttons else None # 仅当有按钮时才创建
-
     try:
-        # === 使用 user.user_id 获取头像 ===
+        # === 修改 1: 使用 user.user_id 获取头像 ===
         user_photo = await context.bot.get_user_profile_photos(user.user_id, limit=1)
 
         if user_photo.total_count > 0:
@@ -157,26 +151,25 @@ async def send_contact_card(
             await context.bot.send_photo(
                 chat_id,
                 photo=pic,
-                # === 使用 user.user_id 生成文本 ===
-                caption=f"👤 {mention_html(user.user_id, user.first_name or str(user.user_id))}\n\n📱 {user.user_id}\n\n🔗 @{user.username if user.username else '无'}",
+                # === 修改 2 & 3: 使用 user.user_id 生成文本 ===
+                caption=f"👤 {mention_html(user.user_id, user.first_name or str(user.user_id))}\n\n📱 {user.user_id}\n\n🔗 {f'@{user.username}' if user.username else f'tg://user?id={user.user_id}'}",
                 message_thread_id=message_thread_id,
-                reply_markup=reply_markup,
                 parse_mode="HTML",
             )
         else:
             # 如果没有头像，可以只发送文本信息或者使用 send_message
             await context.bot.send_message(
                 chat_id,
-                # === 使用 user.user_id 生成文本 ===
-                text=f"👤 {mention_html(user.user_id, user.first_name or str(user.user_id))}\n\n📱 {user.user_id}\n\n🔗 @{user.username if user.username else '无'}",
+                # === 修改 4 & 5: 使用 user.user_id 生成文本 ===
+                text=f"👤 {mention_html(user.user_id, user.first_name or str(user.user_id))}\n\n📱 {user.user_id}\n\n🔗 {f'@{user.username}' if user.username else f'tg://user?id={user.user_id}'}",
                 message_thread_id=message_thread_id,
-                reply_markup=reply_markup,
                 parse_mode="HTML",
             )
     except Exception as e:
+         # === 修改 6: 日志中使用 user.user_id ===
          logger.error(f"Failed to send contact card for user {user.user_id} to chat {chat_id}: {e}")
 
-# start 命令处理
+# start 命令处理 (你修改后的版本)
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     update_user_db(user)
@@ -212,7 +205,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
-# 人机验证
+# 人机验证 (保持不变，但注意路径)
 async def check_human(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     # 注意: ./assets/imgs 路径相对于脚本执行的当前工作目录
@@ -302,7 +295,7 @@ async def check_human(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return True # 已验证
 
 
-# 处理验证码回调
+# 处理验证码回调 (改进)
 async def callback_query_vcode(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user = query.from_user
@@ -322,7 +315,7 @@ async def callback_query_vcode(update: Update, context: ContextTypes.DEFAULT_TYP
     correct_code = context.user_data.get("vcode")
     vcode_message_id = context.user_data.get("vcode_message_id")
 
-    # 检查验证码是否存在或已过期
+    # 检查验证码是否存在或已过期 (被删除)
     if not correct_code or not vcode_message_id:
         await query.answer("验证已过期或已完成。", show_alert=True)
         # 尝试删除可能残留的旧验证码消息
@@ -371,17 +364,17 @@ async def callback_query_vcode(update: Update, context: ContextTypes.DEFAULT_TYP
         except BadRequest:
              pass # 消息可能已被删除或过期
 
-# 转发消息 u2a
+# 转发消息 u2a (用户到管理员)
 async def forwarding_message_u2a(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     message = update.message # 确保使用 update.message
 
-    # 1. 人机验证 
+    # 1. 人机验证 (如果启用)
     if not disable_captcha:
         if not await check_human(update, context):
             return # 未通过验证则中止
 
-    # 2. 消息频率限制
+    # 2. 消息频率限制 (如果启用)
     if message_interval > 0: # 仅在设置了间隔时检查
         current_time = time.time()
         last_message_time = context.user_data.get("last_message_time", 0)
@@ -400,7 +393,7 @@ async def forwarding_message_u2a(update: Update, context: ContextTypes.DEFAULT_T
 
     # 4. 获取用户和话题信息
     u = db.query(User).filter(User.user_id == user.id).first()
-    if not u: # 理论上 update_user_db 后应该存在
+    if not u: # 理论上 update_user_db 后应该存在，但加个保险
         logger.error(f"User {user.id} not found in DB after update_user_db call.")
         await message.reply_html("发生内部错误，无法处理您的消息。")
         return
@@ -418,8 +411,8 @@ async def forwarding_message_u2a(update: Update, context: ContextTypes.DEFAULT_T
             return # 如果话题关闭，则不转发
 
     # 6. 如果没有话题ID，创建新话题
-    if not message_thread_id or topic_status == "closed": # 如果话题被非永久删除关闭，也视为需要重开
-        # 如果 !is_delete_topic_as_ban_forever 且 topic_status == "closed"，理论上不应到这里
+    if not message_thread_id or topic_status == "closed": # 如果话题被非永久删除关闭，也视为需要重开（根据逻辑决定）
+        # 如果 !is_delete_topic_as_ban_forever 且 topic_status == "closed"，理论上不应到这里，但作为保险
         if topic_status == "closed" and is_delete_topic_as_ban_forever:
             return # 确认不再处理
 
@@ -556,7 +549,7 @@ async def forwarding_message_u2a(update: Update, context: ContextTypes.DEFAULT_T
         await message.reply_html("发送消息时发生未知错误。")
 
 
-# 转发消息 a2u 
+# 转发消息 a2u (管理员到用户)
 async def forwarding_message_a2u(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 仅处理来自管理群组的消息
     if not update.message or update.message.chat.id != admin_group_id:
@@ -590,14 +583,6 @@ async def forwarding_message_a2u(update: Update, context: ContextTypes.DEFAULT_T
 
     if message.forum_topic_closed:
         logger.info(f"Topic {message_thread_id} closed event received.")
-        target_user = db.query(User).filter(User.message_thread_id == message_thread_id).first()
-        if target_user:
-            try:
-                await context.bot.send_message(
-                    target_user.user_id, "对话已由管理员关闭。你暂时无法发送消息到此对话。"
-                )
-            except Exception as e:
-                logger.warning(f"Failed to notify user {target_user.user_id} about topic close: {e}")
         # 更新数据库状态
         f_status = db.query(FormnStatus).filter(FormnStatus.message_thread_id == message_thread_id).first()
         if f_status:
@@ -613,12 +598,6 @@ async def forwarding_message_a2u(update: Update, context: ContextTypes.DEFAULT_T
 
     if message.forum_topic_reopened:
         logger.info(f"Topic {message_thread_id} reopened event received.")
-        target_user = db.query(User).filter(User.message_thread_id == message_thread_id).first()
-        if target_user:
-             try:
-                await context.bot.send_message(target_user.user_id, "管理员已重新打开对话，你可以继续发送消息了。")
-             except Exception as e:
-                 logger.warning(f"Failed to notify user {target_user.user_id} about topic reopen: {e}")
         # 更新数据库状态
         f_status = db.query(FormnStatus).filter(FormnStatus.message_thread_id == message_thread_id).first()
         if f_status:
@@ -640,7 +619,7 @@ async def forwarding_message_a2u(update: Update, context: ContextTypes.DEFAULT_T
         return
     user_id = target_user.user_id # 目标用户 chat_id
 
-    # 5. 检查话题是否关闭 
+    # 5. 检查话题是否关闭 (如果管理员在关闭的话题里发言)
     f_status = db.query(FormnStatus).filter(FormnStatus.message_thread_id == message_thread_id).first()
     if f_status and f_status.status == "closed":
         # 根据策略决定是否允许转发
@@ -648,7 +627,7 @@ async def forwarding_message_a2u(update: Update, context: ContextTypes.DEFAULT_T
         await message.reply_html("提醒：此对话已关闭。用户的消息可能不会被发送，除非你重新打开对话。", quote=True)
         # return # 如果不允许在关闭时转发，取消下一行注释
 
-    # 6. 准备转发参数 
+    # 6. 准备转发参数 (主要是处理回复)
     params = {}
     if message.reply_to_message:
         reply_in_admin_group = message.reply_to_message.message_id
@@ -659,7 +638,7 @@ async def forwarding_message_a2u(update: Update, context: ContextTypes.DEFAULT_T
         else:
             logger.debug(f"Original message for reply {reply_in_admin_group} not found in user map.")
 
-    # 7. 处理转发逻辑
+    # 7. 处理转发逻辑 (包括媒体组)
     try:
         target_chat = await context.bot.get_chat(user_id) # 获取目标用户 chat 对象
 
@@ -715,6 +694,7 @@ async def forwarding_message_a2u(update: Update, context: ContextTypes.DEFAULT_T
         # 处理用户屏蔽了机器人或删除了对话的情况
         if "bot was blocked by the user" in str(e) or "user is deactivated" in str(e) or "chat not found" in str(e).lower():
             await message.reply_html(f"⚠️ 无法将消息发送给用户 {mention_html(user_id, target_user.first_name or str(user_id))}。可能原因：用户已停用、将机器人拉黑或删除了对话。", quote=True, parse_mode='HTML')
+            # 可以考虑在这里关闭话题或做其他处理
         else:
             await message.reply_html(f"向用户发送消息失败: {e}", quote=True)
     except Exception as e:
@@ -722,7 +702,7 @@ async def forwarding_message_a2u(update: Update, context: ContextTypes.DEFAULT_T
         await message.reply_html(f"向用户发送消息时发生未知错误: {e}", quote=True)
 
 
-# --- 处理用户编辑的消息 ---
+# --- 新增：处理用户编辑的消息 ---
 async def handle_edited_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """处理来自用户私聊的已编辑消息。"""
     if not update.edited_message:
@@ -747,7 +727,7 @@ async def handle_edited_user_message(update: Update, context: ContextTypes.DEFAU
         logger.debug(f"用户 {user_id} 编辑消息 {edited_msg_id} 时未找到话题 ID")
         return
 
-    # 检查话题是否关闭 
+    # 检查话题是否关闭 (通常编辑已不重要，但以防万一)
     f_status = db.query(FormnStatus).filter(FormnStatus.message_thread_id == u.message_thread_id).first()
     if f_status and f_status.status == "closed":
         logger.info(f"话题 {u.message_thread_id} 已关闭，忽略用户 {user_id} 的编辑同步请求。")
@@ -757,13 +737,13 @@ async def handle_edited_user_message(update: Update, context: ContextTypes.DEFAU
     # message_thread_id = u.message_thread_id # 编辑时不需要显式传入 thread_id
 
     try:
-        if edited_msg.text is not None: # 检查是否有文本内容
+        if edited_msg.text is not None: # 检查是否有文本内容 (空字符串也算)
             await context.bot.edit_message_text(
                 chat_id=admin_group_id,
                 message_id=group_msg_id,
                 text=edited_msg.text_html, # 使用 HTML 格式
                 parse_mode='HTML',
-                # 不指定 reply_markup 会保留原来的按钮
+                # 不指定 reply_markup 会保留原来的按钮 (如果有)
             )
             logger.info(f"已同步用户编辑 (文本) user_msg({edited_msg_id}) 到 group_msg({group_msg_id})")
         elif edited_msg.caption is not None: # 检查是否有说明文字
@@ -788,7 +768,7 @@ async def handle_edited_user_message(update: Update, context: ContextTypes.DEFAU
         logger.error(f"同步用户编辑 user_msg({edited_msg_id}) 到 group_msg({group_msg_id}) 时发生意外错误: {e}", exc_info=True)
 
 
-# --- 处理管理员编辑的消息 ---
+# --- 新增：处理管理员编辑的消息 ---
 async def handle_edited_admin_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """处理来自管理群组话题的已编辑消息。"""
     if not update.edited_message or update.edited_message.chat.id != admin_group_id:
@@ -813,7 +793,7 @@ async def handle_edited_admin_message(update: Update, context: ContextTypes.DEFA
     user_chat_msg_id = msg_map.user_chat_message_id
     user_id = msg_map.user_id # 从映射记录获取目标用户 ID
 
-    # 检查话题状态 
+    # 检查话题状态 (可选，管理员可能希望编辑关闭话题中的消息)
     # f_status = db.query(FormnStatus).filter(FormnStatus.message_thread_id == message_thread_id).first()
     # if f_status and f_status.status == "closed":
     #     logger.info(f"Topic {message_thread_id} is closed. Skipping admin edit sync.")
@@ -853,7 +833,7 @@ async def handle_edited_admin_message(update: Update, context: ContextTypes.DEFA
         logger.error(f"同步管理员编辑 group_msg({edited_msg_id}) 到 user_msg({user_chat_msg_id}) 时发生意外错误: {e}", exc_info=True)
 
 
-# 清理话题
+# 清理话题 (clear 命令)
 async def clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     message = update.message
@@ -939,7 +919,7 @@ async def clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.info(f"Cleared message map entries for user {target_user.user_id}.")
 
 
-# 广播回调 
+# 广播回调 (保持不变)
 async def _broadcast(context: ContextTypes.DEFAULT_TYPE):
     job_data = context.job.data
     if not isinstance(job_data, str) or "_" not in job_data:
@@ -989,7 +969,7 @@ async def _broadcast(context: ContextTypes.DEFAULT_TYPE):
     #     await context.bot.send_message(originator_admin_id, f"广播完成：成功 {success}，失败 {failed}，屏蔽/停用 {block_or_deactivated}")
 
 
-# 广播命令
+# 广播命令 (保持不变)
 async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user.id not in admin_user_ids:
@@ -1015,7 +995,7 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_html(f"📢 广播任务已计划执行。将广播消息 ID: {broadcast_message.id}")
 
 
-# 错误处理 
+# 错误处理 (保持不变)
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     """记录错误日志。"""
     logger.error(f"处理更新时发生异常: {context.error}", exc_info=context.error)
