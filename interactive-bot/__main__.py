@@ -404,10 +404,7 @@ async def forwarding_message_u2a(update: Update, context: ContextTypes.DEFAULT_T
         f_status = db.query(FormnStatus).filter(FormnStatus.message_thread_id == message_thread_id).first()
         if f_status and f_status.status == "closed":
             topic_status = "closed"
-            if is_delete_topic_as_ban_forever:
-                await message.reply_html("对话已被管理员关闭且禁止重开。您的消息无法送达。")
-            else:
-                await message.reply_html("对话已被管理员关闭。您的消息暂时无法送达。如需继续，请等待管理员重新打开对话。")
+            await message.reply_html("对话已被管理员关闭。您的消息暂时无法送达。如需继续，请等待或请求管理员重新打开对话。")
             return # 如果话题关闭，则不转发
 
     # 6. 如果没有话题ID，创建新话题
