@@ -1,6 +1,7 @@
 import os
 import random
 import time
+import asyncio
 from datetime import datetime, timedelta
 from string import ascii_letters as letters
 
@@ -449,7 +450,19 @@ async def forwarding_message_u2a(update: Update, context: ContextTypes.DEFAULT_T
              await message.reply_html("创建会话时发生未知错误。")
              return
 
-    # 7. 准备转发参数
+    # 7. 每日首次消息回执
+    try:
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        last_ack_date = context.user_data.get("last_ack_date")
+        if last_ack_date != today_str:
+            ack_msg = await message.reply_text("您的消息已送达")
+            context.user_data["last_ack_date"] = today_str
+            # 10 秒后自动删除回执
+            await delete_message_later(3, ack_msg.chat.id, ack_msg.message_id, context)
+    except Exception as e:
+        logger.warning(f"Failed to send daily ack to user {user.id}: {e}")
+
+    # 8. 准备转发参数
     params = {"message_thread_id": message_thread_id}
     if message.reply_to_message:
         reply_in_user_chat = message.reply_to_message.message_id
@@ -460,7 +473,7 @@ async def forwarding_message_u2a(update: Update, context: ContextTypes.DEFAULT_T
             logger.debug(f"Original message for reply {reply_in_user_chat} not found in group map.")
             # 可以选择不引用，或者通知用户无法引用
 
-    # 8. 处理转发逻辑 (包括媒体组)
+    # 9. 处理转发逻辑 (包括媒体组)
     try:
         if message.media_group_id:
             # 处理媒体组
