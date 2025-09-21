@@ -219,7 +219,7 @@ async def check_human(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.user_data.get("is_human", False): # 检查是否已经验证通过
         if context.user_data.get("is_human_error_time", 0) > time.time() - 120:
             # 2分钟内禁言
-            sent_msg = await update.message.reply_html("你因验证码错误已被临时禁言，请 2 分钟后再试。")
+            sent_msg = await update.message.reply_html("你因验证码错误已被临时禁言，请 2 分钟后再试。\nYou have been temporarily muted due to captcha error, please try again in 2 minutes.")
             await delete_message_later(10, sent_msg.chat.id, sent_msg.message_id, context) # 10秒后删除提示
             await delete_message_later(5, update.message.chat.id, update.message.message_id, context) # 5秒后删除用户消息
             return False
@@ -245,7 +245,7 @@ async def check_human(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # 每行最多4个按钮
             button_matrix = [buttons[i : i + 4] for i in range(0, len(buttons), 4)]
 
-            captcha_message = f"{mention_html(user.id, user.first_name or str(user.id))}，请在 60 秒内点击图片中显示的验证码。回答错误将导致临时禁言。"
+            captcha_message = f"{mention_html(user.id, user.first_name or str(user.id))}，请在 60 秒内点击图片中显示的验证码。回答错误将导致临时禁言。\n{mention_html(user.id, user.first_name or str(user.id))}, please click the captcha shown in the image within 60 seconds. Wrong answers will result in temporary muting."
 
             if photo_file_id:
                 # 如果有缓存，直接用 file_id 发送
@@ -279,17 +279,17 @@ async def check_human(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return False # 需要用户验证
         except FileNotFoundError:
              logger.error(f"Captcha image file not found: {file_path}")
-             await update.message.reply_html("抱歉，验证码图片丢失，请稍后再试或联系管理员。")
+             await update.message.reply_html("抱歉，验证码图片丢失，请稍后再试或联系对方。\nSorry, the captcha image is missing, please try again later or contact him.")
              context.user_data["is_human"] = True # 暂时跳过
              return True
         except IndexError:
             logger.error(f"Captcha image directory '{img_dir}' seems empty.")
-            await update.message.reply_html("抱歉，无法加载验证码，请稍后再试或联系管理员。")
+            await update.message.reply_html("抱歉，无法加载验证码，请稍后再试或联系对方。\nSorry, unable to load captcha, please try again later or contact him.")
             context.user_data["is_human"] = True # 暂时跳过
             return True
         except Exception as e:
              logger.error(f"Error during check_human: {e}", exc_info=True)
-             await update.message.reply_html("抱歉，验证过程中发生错误，请稍后再试。")
+             await update.message.reply_html("抱歉，验证过程中发生错误，请稍后再试。\nSorry, an error occurred during verification, please try again later.")
              context.user_data["is_human"] = True # 暂时跳过
              return True
 
@@ -304,12 +304,12 @@ async def callback_query_vcode(update: Update, context: ContextTypes.DEFAULT_TYP
         _, code_clicked, target_user_id_str = query.data.split("_")
     except ValueError:
         logger.warning(f"Invalid vcode callback data format: {query.data}")
-        await query.answer("无效操作。", show_alert=True)
+        await query.answer("无效操作。\nInvalid operation.", show_alert=True)
         return
 
     if target_user_id_str != str(user.id):
         # 不是发给这个用户的验证码
-        await query.answer("这不是给你的验证码哦。", show_alert=True)
+        await query.answer("这不是给你的验证码哦。\nThis captcha is not for you.", show_alert=True)
         return
 
     # 从 user_data 获取正确的验证码和消息 ID
@@ -318,7 +318,7 @@ async def callback_query_vcode(update: Update, context: ContextTypes.DEFAULT_TYP
 
     # 检查验证码是否存在或已过期 (被删除)
     if not correct_code or not vcode_message_id:
-        await query.answer("验证已过期或已完成。", show_alert=True)
+        await query.answer("验证已过期或已完成。\nVerification has expired or been completed.", show_alert=True)
         # 尝试删除可能残留的旧验证码消息
         if query.message and query.message.message_id == vcode_message_id:
              try:
@@ -329,17 +329,17 @@ async def callback_query_vcode(update: Update, context: ContextTypes.DEFAULT_TYP
 
     # 防止重复点击或处理旧消息
     if query.message and query.message.message_id != vcode_message_id:
-        await query.answer("此验证码已失效。", show_alert=True)
+        await query.answer("此验证码已失效。\nThis captcha is no longer valid.", show_alert=True)
         return
 
 
     if code_clicked == correct_code:
         # 点击正确
-        await query.answer("✅ 验证成功！", show_alert=False)
+        await query.answer("✅ 验证成功！\n✅ Verification successful!", show_alert=False)
         # 发送欢迎消息
         await context.bot.send_message(
             user.id, # 直接发送给用户
-            f"🎉 {mention_html(user.id, user.first_name or str(user.id))}，验证通过，现在可以开始对话了！",
+            f"🎉 {mention_html(user.id, user.first_name or str(user.id))}，验证通过，现在可以开始对话了！\n🎉 {mention_html(user.id, user.first_name or str(user.id))}, verification passed, you can now start chatting!",
             parse_mode="HTML",
         )
         context.user_data["is_human"] = True
@@ -354,7 +354,7 @@ async def callback_query_vcode(update: Update, context: ContextTypes.DEFAULT_TYP
             pass # 消息可能已被删除或过期
     else:
         # 点击错误
-        await query.answer("❌ 验证码错误！请等待 2 分钟后再试。", show_alert=True)
+        await query.answer("❌ 验证码错误！请等待 2 分钟后再试。\n❌ Captcha error! Please wait 2 minutes before trying again.", show_alert=True)
         context.user_data["is_human_error_time"] = time.time() # 记录错误时间
         # 清理验证码信息，强制用户下次重新获取
         context.user_data.pop("vcode", None)
@@ -383,7 +383,7 @@ async def forwarding_message_u2a(update: Update, context: ContextTypes.DEFAULT_T
             time_left = round(last_message_time + message_interval - current_time)
             # 只在剩余时间大于 0 时提示
             if time_left > 0:
-                reply_msg = await message.reply_html(f"发送消息过于频繁，请等待 {time_left} 秒后再试。")
+                reply_msg = await message.reply_html(f"发送消息过于频繁，请等待 {time_left} 秒后再试。\nSending messages too frequently, please wait {time_left} seconds before trying again.")
                 await delete_message_later(5, reply_msg.chat_id, reply_msg.message_id, context)
                 await delete_message_later(3, message.chat.id, message.message_id, context) # 删除用户过快的消息
             return # 中止处理
@@ -396,7 +396,7 @@ async def forwarding_message_u2a(update: Update, context: ContextTypes.DEFAULT_T
     u = db.query(User).filter(User.user_id == user.id).first()
     if not u: # 理论上 update_user_db 后应该存在，但加个保险
         logger.error(f"User {user.id} not found in DB after update_user_db call.")
-        await message.reply_html("发生内部错误，无法处理您的消息。")
+        await message.reply_html("发生内部错误，无法处理您的消息。\nAn internal error occurred and your message cannot be processed.")
         return
     message_thread_id = u.message_thread_id
     # 5. 检查话题状态
@@ -405,7 +405,7 @@ async def forwarding_message_u2a(update: Update, context: ContextTypes.DEFAULT_T
         f_status = db.query(FormnStatus).filter(FormnStatus.message_thread_id == message_thread_id).first()
         if f_status and f_status.status == "closed":
             topic_status = "closed"
-            await message.reply_html("对话已被管理员关闭。您的消息暂时无法送达。如需继续，请等待或请求管理员重新打开对话。")
+            await message.reply_html("对话已被对方关闭。您的消息暂时无法送达。如需继续，请等待或请求对方重新打开对话。\nThe conversation has been closed by him. Your message cannot be delivered temporarily. If you need to continue, please wait or ask him to reopen the conversation.")
             return # 如果话题关闭，则不转发
 
     # 6. 如果没有话题ID，创建新话题
@@ -443,11 +443,11 @@ async def forwarding_message_u2a(update: Update, context: ContextTypes.DEFAULT_T
 
         except BadRequest as e:
              logger.error(f"Failed to create topic for user {user.id}: {e}")
-             await message.reply_html(f"创建会话失败，请稍后再试或联系管理员。\n错误: {e}")
+             await message.reply_html(f"创建会话失败，请稍后再试或联系对方。\nFailed to create session, please try again later or contact him.\nError: {e}")
              return
         except Exception as e:
              logger.error(f"Unexpected error creating topic for user {user.id}: {e}", exc_info=True)
-             await message.reply_html("创建会话时发生未知错误。")
+             await message.reply_html("创建会话时发生未知错误。\nAn unknown error occurred while creating the session.")
              return
 
     # 7. 每日首次消息回执
@@ -455,7 +455,7 @@ async def forwarding_message_u2a(update: Update, context: ContextTypes.DEFAULT_T
         today_str = datetime.now().strftime("%Y-%m-%d")
         last_ack_date = context.user_data.get("last_ack_date")
         if last_ack_date != today_str:
-            ack_msg = await message.reply_text("您的消息已送达")
+            ack_msg = await message.reply_text("您的消息已送达\nYour message has been delivered")
             context.user_data["last_ack_date"] = today_str
             # 10 秒后自动删除回执
             await delete_message_later(3, ack_msg.chat.id, ack_msg.message_id, context)
@@ -542,21 +542,21 @@ async def forwarding_message_u2a(update: Update, context: ContextTypes.DEFAULT_T
                 # 检查是否允许重开话题
                 if not is_delete_topic_as_ban_forever:
                      await message.reply_html(
-                         "发送失败：你之前的对话已被删除。请重新发送一次当前消息。"
+                         "发送失败：你之前的对话已被删除。请重新发送一次当前消息。\nSend failed: Your previous conversation has been deleted. Please resend the current message."
                      )
                 else:
                      # 如果是永久禁止，则发送提示给用户，并确保不重试
                      await message.reply_html(
-                         "发送失败：你的对话已被永久删除。消息无法送达。"
+                         "发送失败：你的对话已被永久删除。消息无法送达。\nSend failed: Your conversation has been permanently deleted. Message cannot be delivered."
                      )
                     # retry_attempt = False # 确保不重试
             else:
                  # 如果是其他类型的 BadRequest 错误，通知用户并停止重试
-                 await message.reply_html(f"发送消息时遇到问题，请稍后再试。\n错误: {e}")
+                 await message.reply_html(f"发送消息时遇到问题，请稍后再试。\nEncountered a problem while sending the message, please try again later.\nError: {e}")
                  retry_attempt = False # 停止重试
     except Exception as e:
         logger.error(f"Unexpected error forwarding message u2a (user: {user.id}): {e}", exc_info=True)
-        await message.reply_html("发送消息时发生未知错误。")
+        await message.reply_html("发送消息时发生未知错误。\nAn unknown error occurred while sending the message.")
 
 
 # 转发消息 a2u (管理员到用户)
