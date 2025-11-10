@@ -37,6 +37,7 @@ from . import (
     welcome_message,
     disable_captcha,
     message_interval,
+    enable_math_verification,
 )
 from .utils import delete_message_later
 
@@ -200,10 +201,30 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         # return ConversationHandler.END # 不应在 start 命令中结束会话
     else:
-        # 非管理员用户的欢迎消息
-        await update.message.reply_html(
-            f"{mention_html(user.id, user.full_name)}：\n\n{welcome_message}"
-        )
+        # 非管理员用户
+        # 如果启用了数学验证码且用户未验证，立即发送验证码
+        if enable_math_verification and not context.user_data.get("math_verified", False):
+            # 生成验证码
+            challenge = generate_math_verification_challenge()
+            context.user_data["math_verification_challenge"] = challenge['challenge']
+            context.user_data["math_verification_answer"] = challenge['answer']
+            context.user_data["math_verification_offset"] = challenge['offset']
+            context.user_data["math_verification_attempts"] = 0
+            
+            # 发送验证码消息
+            await update.message.reply_html(
+                f"👋 {mention_html(user.id, user.full_name)}，欢迎使用！\n\n"
+                f"🔐 验证码：四位数 <b>{challenge['challenge']}</b> 的每一位数字加上 <b>{challenge['offset']}</b>（超过9取个位数）\n\n"
+                f"⚠️ 请输入4位数字答案\n\n"
+                f"👋 {mention_html(user.id, user.full_name)}, Welcome!\n\n"
+                f"🔐 Verification: Each digit of <b>{challenge['challenge']}</b> plus <b>{challenge['offset']}</b> (if over 9, keep ones digit)\n\n"
+                f"⚠️ Please enter 4-digit answer"
+            )
+        else:
+            # 已验证或未启用验证码，显示欢迎消息
+            await update.message.reply_html(
+                f"{mention_html(user.id, user.full_name)}：\n\n{welcome_message}"
+            )
 
 
 # 人机验证 (保持不变，但注意路径)
@@ -296,6 +317,144 @@ async def check_human(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return True # 已验证
 
 
+# 生成数学验证码挑战和答案
+def generate_math_verification_challenge():
+    """生成一个4位数字和一个加数（offset），用户需要计算每位数字加上offset后的结果"""
+    # 随机生成四位数字
+    challenge_digits = ''.join([str(random.randint(0, 9)) for _ in range(4)])
+    
+    # 随机生成加数（1-9，避免0没有意义）
+    offset = random.randint(1, 9)
+    
+    # 计算正确答案
+    answer = ''.join([str((int(d) + offset) % 10) for d in challenge_digits])
+    
+    return {
+        'challenge': challenge_digits,
+        'answer': answer,
+        'offset': offset
+    }
+
+
+# 数学验证码验证
+async def check_math_verification(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    检查用户的数学验证码
+    返回 True: 已验证，允许转发消息
+    返回 False: 未验证或验证中，不转发消息
+    """
+    user = update.effective_user
+    message = update.message
+    
+    # 如果已经验证通过，直接返回 True，允许转发消息
+    if context.user_data.get("math_verified", False):
+        return True
+    
+    # 检查是否因验证失败而被临时禁言
+    if context.user_data.get("math_verification_banned_until", 0) > time.time():
+        time_left = int(context.user_data["math_verification_banned_until"] - time.time())
+        sent_msg = await message.reply_html(
+            f"🚫 验证错误过多，请 {time_left} 秒后再试\n"
+            f"🚫 Too many errors, try again in {time_left} seconds"
+        )
+        await delete_message_later(10, sent_msg.chat.id, sent_msg.message_id, context)
+        await delete_message_later(5, message.chat.id, message.message_id, context)
+        return False
+    
+    # 检查是否已达到最大尝试次数（10次）
+    total_attempts = context.user_data.get("math_verification_attempts", 0)
+    if total_attempts >= 10:
+        sent_msg = await message.reply_html(
+            "❌ 验证失败10次，已禁止使用\n"
+            "❌ 10 failed attempts, access denied"
+        )
+        await delete_message_later(30, sent_msg.chat.id, sent_msg.message_id, context)
+        await delete_message_later(5, message.chat.id, message.message_id, context)
+        return False
+    
+    # 如果还没有发送验证挑战，生成新的验证码
+    if not context.user_data.get("math_verification_challenge"):
+        challenge = generate_math_verification_challenge()
+        context.user_data["math_verification_challenge"] = challenge['challenge']
+        context.user_data["math_verification_answer"] = challenge['answer']
+        context.user_data["math_verification_offset"] = challenge['offset']
+        context.user_data["math_verification_attempts"] = 0
+    
+    # 获取当前的验证码信息
+    current_challenge = context.user_data.get("math_verification_challenge")
+    current_offset = context.user_data.get("math_verification_offset")
+    
+    # 用户发送的内容
+    user_answer = message.text.strip() if message.text else ""
+    
+    # 如果不是4位数字，显示验证码题目并提示
+    if not user_answer or not user_answer.isdigit() or len(user_answer) != 4:
+        sent_msg = await message.reply_html(
+            f"🔐 验证码：四位数 <b>{current_challenge}</b> 的每一位数字加上 <b>{current_offset}</b>（超过9取个位数）\n\n"
+            f"⚠️ 请输入4位数字答案\n\n"
+            f"🔐 Verification: Each digit of <b>{current_challenge}</b> plus <b>{current_offset}</b> (if over 9, keep ones digit)\n\n"
+            f"⚠️ Please enter 4-digit answer"
+        )
+        await delete_message_later(60, sent_msg.chat.id, sent_msg.message_id, context)
+        await delete_message_later(5, message.chat.id, message.message_id, context)
+        return False
+    
+    correct_answer = context.user_data.get("math_verification_answer")
+    
+    # 验证答案
+    if user_answer == correct_answer:
+        # 验证成功
+        context.user_data["math_verified"] = True
+        context.user_data.pop("math_verification_challenge", None)
+        context.user_data.pop("math_verification_answer", None)
+        context.user_data.pop("math_verification_offset", None)
+        context.user_data.pop("math_verification_attempts", None)
+        context.user_data.pop("math_verification_banned_until", None)
+        
+        await message.reply_html(
+            "✅ 验证成功！\n✅ Verification successful!"
+        )
+        
+        # 发送欢迎消息（与未启用验证码时的格式完全一致）
+        await message.reply_html(
+            f"{mention_html(user.id, user.full_name)}：\n\n{welcome_message}"
+        )
+        
+        # 删除验证码答案消息，因为这不是用户真正想发送的内容
+        await delete_message_later(3, message.chat.id, message.message_id, context)
+        return False  # 不转发验证码答案，让用户重新发送真正的消息
+    else:
+        # 验证失败，增加尝试次数
+        new_total_attempts = total_attempts + 1
+        context.user_data["math_verification_attempts"] = new_total_attempts
+        
+        # 如果达到上限，禁止使用
+        if new_total_attempts >= 10:
+            sent_msg = await message.reply_html(
+                "❌ 验证失败已达上限（10次），已禁止使用\n"
+                "❌ Maximum attempts reached (10), access denied"
+            )
+            await delete_message_later(30, sent_msg.chat.id, sent_msg.message_id, context)
+            await delete_message_later(5, message.chat.id, message.message_id, context)
+            return False
+        
+        # 重新生成新的验证码
+        challenge = generate_math_verification_challenge()
+        context.user_data["math_verification_challenge"] = challenge['challenge']
+        context.user_data["math_verification_answer"] = challenge['answer']
+        context.user_data["math_verification_offset"] = challenge['offset']
+        
+        sent_msg = await message.reply_html(
+            f"❌ 验证失败（{new_total_attempts}/10）\n\n"
+            f"🔐 新验证码：四位数 <b>{challenge['challenge']}</b> 的每一位数字加上 <b>{challenge['offset']}</b>（超过9取个位数）\n\n"
+            f"❌ Failed ({new_total_attempts}/10)\n\n"
+            f"🔐 New code: Each digit of <b>{challenge['challenge']}</b> plus <b>{challenge['offset']}</b> (if over 9, keep ones digit)"
+        )
+        await delete_message_later(60, sent_msg.chat.id, sent_msg.message_id, context)
+        await delete_message_later(5, message.chat.id, message.message_id, context)
+        return False
+
+
 # 处理验证码回调 (改进)
 async def callback_query_vcode(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -370,12 +529,17 @@ async def forwarding_message_u2a(update: Update, context: ContextTypes.DEFAULT_T
     user = update.effective_user
     message = update.message # 确保使用 update.message
 
-    # 1. 人机验证 (如果启用)
-    if not disable_captcha:
+    # 1. 数学验证码验证 (如果启用，优先于图片验证码)
+    if enable_math_verification:
+        if not await check_math_verification(update, context):
+            return # 未通过验证则中止
+    
+    # 2. 图片人机验证 (如果启用且未启用数学验证)
+    elif not disable_captcha:
         if not await check_human(update, context):
             return # 未通过验证则中止
 
-    # 2. 消息频率限制 (如果启用)
+    # 3. 消息频率限制 (如果启用)
     if message_interval > 0: # 仅在设置了间隔时检查
         current_time = time.time()
         last_message_time = context.user_data.get("last_message_time", 0)
@@ -389,17 +553,17 @@ async def forwarding_message_u2a(update: Update, context: ContextTypes.DEFAULT_T
             return # 中止处理
         context.user_data["last_message_time"] = current_time # 更新最后发送时间
 
-    # 3. 更新用户信息
+    # 4. 更新用户信息
     update_user_db(user)
 
-    # 4. 获取用户和话题信息
+    # 5. 获取用户和话题信息
     u = db.query(User).filter(User.user_id == user.id).first()
     if not u: # 理论上 update_user_db 后应该存在，但加个保险
         logger.error(f"User {user.id} not found in DB after update_user_db call.")
         await message.reply_html("发生内部错误，无法处理您的消息。\nAn internal error occurred and your message cannot be processed.")
         return
     message_thread_id = u.message_thread_id
-    # 5. 检查话题状态
+    # 6. 检查话题状态
     topic_status = "opened" # 默认状态
     if message_thread_id:
         f_status = db.query(FormnStatus).filter(FormnStatus.message_thread_id == message_thread_id).first()
@@ -408,7 +572,7 @@ async def forwarding_message_u2a(update: Update, context: ContextTypes.DEFAULT_T
             await message.reply_html("对话已被对方关闭。您的消息暂时无法送达。如需继续，请等待或请求对方重新打开对话。\nThe conversation has been closed by him. Your message cannot be delivered temporarily. If you need to continue, please wait or ask him to reopen the conversation.")
             return # 如果话题关闭，则不转发
 
-    # 6. 如果没有话题ID，创建新话题
+    # 7. 如果没有话题ID，创建新话题
     if not message_thread_id or topic_status == "closed": # 如果话题被非永久删除关闭，也视为需要重开（根据逻辑决定）
         # 如果 !is_delete_topic_as_ban_forever 且 topic_status == "closed"，理论上不应到这里，但作为保险
         if topic_status == "closed" and is_delete_topic_as_ban_forever:
@@ -450,7 +614,7 @@ async def forwarding_message_u2a(update: Update, context: ContextTypes.DEFAULT_T
              await message.reply_html("创建会话时发生未知错误。\nAn unknown error occurred while creating the session.")
              return
 
-    # 7. 每日首次消息回执
+    # 8. 每日首次消息回执
     try:
         today_str = datetime.now().strftime("%Y-%m-%d")
         last_ack_date = context.user_data.get("last_ack_date")
@@ -462,7 +626,7 @@ async def forwarding_message_u2a(update: Update, context: ContextTypes.DEFAULT_T
     except Exception as e:
         logger.warning(f"Failed to send daily ack to user {user.id}: {e}")
 
-    # 8. 准备转发参数
+    # 9. 准备转发参数
     params = {"message_thread_id": message_thread_id}
     if message.reply_to_message:
         reply_in_user_chat = message.reply_to_message.message_id
@@ -473,7 +637,7 @@ async def forwarding_message_u2a(update: Update, context: ContextTypes.DEFAULT_T
             logger.debug(f"Original message for reply {reply_in_user_chat} not found in group map.")
             # 可以选择不引用，或者通知用户无法引用
 
-    # 9. 处理转发逻辑 (包括媒体组)
+    # 10. 处理转发逻辑 (包括媒体组)
     try:
         if message.media_group_id:
             # 处理媒体组
@@ -703,7 +867,7 @@ async def forwarding_message_a2u(update: Update, context: ContextTypes.DEFAULT_T
         logger.warning(f"Failed to forward message a2u (topic: {message_thread_id} -> user: {user_id}): {e}")
         # 处理用户屏蔽了机器人或删除了对话的情况
         if "bot was blocked by the user" in str(e) or "user is deactivated" in str(e) or "chat not found" in str(e).lower():
-            await message.reply_html(f"⚠️ 无法将消息发送给用户 {mention_html(user_id, target_user.first_name or str(user_id))}。可能原因：用户已停用、将机器人拉黑或删除了对话。", quote=True, parse_mode='HTML')
+            await message.reply_html(f"⚠️ 无法将消息发送给用户 {mention_html(user_id, target_user.first_name or str(user_id))}。可能原因：用户已停用、将机器人拉黑或删除了对话。", quote=True)
             # 可以考虑在这里关闭话题或做其他处理
         else:
             await message.reply_html(f"向用户发送消息失败: {e}", quote=True)
