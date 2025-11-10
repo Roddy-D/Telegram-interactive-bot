@@ -34,3 +34,5 @@ is_delete_topic_as_ban_forever = os.getenv("DELETE_TOPIC_AS_FOREVER_BAN") == "TR
 is_delete_user_messages = os.getenv("DELETE_USER_MESSAGE_ON_CLEAR_CMD") == "TRUE"
 disable_captcha = os.getenv("DISABLE_CAPTCHA") == "TRUE"
 message_interval = int(os.getenv("MESSAGE_INTERVAL", 5))
+# 数学验证码功能，默认关闭（为 FALSE 或不设置）
+enable_math_verification = os.getenv("ENABLE_MATH_VERIFICATION") == "TRUE"
