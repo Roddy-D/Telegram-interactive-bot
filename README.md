@@ -47,7 +47,7 @@
 可以参考 [频道](https://t.me/jiagesuxian/21)
 
 
-#### 3.2 docker 执行
+#### 3.2 docker 执行（原作者项目）
 1. 安装docker ， 参看 [Install Docker under Ubuntu 22.04](https://gist.github.com/dehsilvadeveloper/c3bdf0f4cdcc5c177e2fe9be671820c7)
 2. 执行`docker build -t tgibot .` 生成一个tgibot的镜像
 3. 执行`docker run --restart always --name telegram-interactive-bot  -v "$PWD":/app tgibot:latest` 生成容器并执行。
