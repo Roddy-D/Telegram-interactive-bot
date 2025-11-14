@@ -39,3 +39,12 @@ class User(Base):
     is_premium = Column(Boolean)
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     message_thread_id = Column(Integer, default=0)
+
+
+class BlockedUser(Base):
+    """存储被屏蔽的用户"""
+    __tablename__ = "blocked_user"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, unique=True, index=True)
+    blocked = Column(Boolean, default=True)
+    blocked_at = Column(Integer)  # Unix timestamp
