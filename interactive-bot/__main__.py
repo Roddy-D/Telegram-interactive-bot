@@ -23,6 +23,7 @@ from telegram.ext import (
 )
 from telegram.helpers import mention_html
 
+from sqlalchemy import text
 from db.database import SessionMaker, engine
 from db.model import Base, BlockedUser, FormnStatus, MediaGroupMesssage, MessageMap, User
 
@@ -42,9 +43,35 @@ from . import (
 from .utils import delete_message_later
 
 # 创建表
-Base.metadata.create_all(bind=engine)
-db = SessionMaker()
+logger.info("正在初始化数据库...")
+try:
+    Base.metadata.create_all(bind=engine)
+    logger.info("✅ 数据库表创建完成")
+except Exception as e:
+    logger.error(f"❌ 数据库表创建失败: {e}", exc_info=True)
+    raise
 
+db = SessionMaker()
+logger.info("✅ 数据库 Session 创建完成")
+
+# 数据库迁移：添加 verification_blocked 字段（如果不存在）
+try:
+    logger.info("正在检查数据库迁移...")
+    # 检查字段是否已存在
+    result = db.execute(text("PRAGMA table_info(blocked_user)"))
+    columns = [row[1] for row in result]
+    
+    if 'verification_blocked' not in columns:
+        # 添加字段
+        db.execute(text("ALTER TABLE blocked_user ADD COLUMN verification_blocked BOOLEAN DEFAULT FALSE"))
+        db.commit()
+        logger.info("✅ 已添加 verification_blocked 字段到 blocked_user 表")
+    else:
+        logger.debug("verification_blocked 字段已存在")
+    logger.info("✅ 数据库迁移检查完成")
+except Exception as e:
+    logger.error(f"❌ 数据库迁移失败: {e}", exc_info=True)
+    db.rollback()
 
 # 延时发送媒体组消息的回调 (保持不变)
 async def _send_media_group_later(context: ContextTypes.DEFAULT_TYPE):
@@ -236,11 +263,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # 发送验证码消息
             await update.message.reply_html(
                 f"👋 {mention_html(user.id, user.full_name)}，欢迎使用！\n\n"
-                f"🔐 验证码：四位数 <b>{challenge['challenge']}</b> 的每一位数字加上 <b>{challenge['offset']}</b>（超过9取个位数）\n\n"
-                f"⚠️ 请输入4位数字答案\n\n"
+                f"🔐 请输入验证码\n\n"
+                f"将当前UTC+8时间的 时分（HHMM格式，仅数字）四位数字的每一位数字加上 <b>{challenge['offset']}</b>，超过9则取个位数\n\n"
+                f"⏰ 请在1分钟内回复验证码，否则将失效\n\n"
                 f"👋 {mention_html(user.id, user.full_name)}, Welcome!\n\n"
-                f"🔐 Verification: Each digit of <b>{challenge['challenge']}</b> plus <b>{challenge['offset']}</b> (if over 9, keep ones digit)\n\n"
-                f"⚠️ Please enter 4-digit answer"
+                f"🔐 Please enter the verification code\n\n"
+                f"Add <b>{challenge['offset']}</b> to each digit of current UTC+8 time in HHMM format (4 digits), if over 9, keep only the ones digit\n\n"
+                f"⏰ Please reply within 1 minute, or the code will expire"
             )
         else:
             # 已验证或未启用验证码，显示欢迎消息
@@ -339,11 +368,25 @@ async def check_human(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return True # 已验证
 
 
-# 生成数学验证码挑战和答案
+# 获取UTC+8时间的HHMM四位数
+def get_utc8_time_digits(offset_minutes=0):
+    """获取UTC+8时间的HHMM四位数"""
+    from datetime import datetime, timezone, timedelta
+    # 获取当前UTC时间
+    now_utc = datetime.now(timezone.utc)
+    # 转换为UTC+8时间
+    utc8_time = now_utc + timedelta(hours=8, minutes=offset_minutes)
+    # 获取小时和分钟
+    hours = utc8_time.strftime('%H')
+    minutes = utc8_time.strftime('%M')
+    return hours + minutes
+
+
+# 生成数学验证码挑战和答案（基于UTC+8时间）
 def generate_math_verification_challenge():
-    """生成一个4位数字和一个加数（offset），用户需要计算每位数字加上offset后的结果"""
-    # 随机生成四位数字
-    challenge_digits = ''.join([str(random.randint(0, 9)) for _ in range(4)])
+    """生成基于UTC+8时间的验证码挑战"""
+    # 获取UTC+8时间的HHMM作为四位数字
+    challenge_digits = get_utc8_time_digits(0)
     
     # 随机生成加数（1-9，避免0没有意义）
     offset = random.randint(1, 9)
@@ -356,6 +399,20 @@ def generate_math_verification_challenge():
         'answer': answer,
         'offset': offset
     }
+
+
+# 验证答案（允许±1分钟的时间偏差）
+def verify_math_answer(user_answer, offset):
+    """验证答案，允许±1分钟的时间偏差"""
+    # 检查当前时间、前1分钟、后1分钟的三种可能答案
+    for time_offset in [-1, 0, 1]:
+        challenge_digits = get_utc8_time_digits(time_offset)
+        correct_answer = ''.join([str((int(d) + offset) % 10) for d in challenge_digits])
+        
+        if user_answer == correct_answer:
+            return True
+    
+    return False
 
 
 # 数学验证码验证
@@ -387,8 +444,15 @@ async def check_math_verification(update: Update, context: ContextTypes.DEFAULT_
     total_attempts = context.user_data.get("math_verification_attempts", 0)
     if total_attempts >= 10:
         # 永久屏蔽用户
-        blocked_user = BlockedUser(user_id=user.id, blocked=True, blocked_at=int(time.time()))
-        db.add(blocked_user)
+        blocked_user = db.query(BlockedUser).filter(BlockedUser.user_id == user.id).first()
+        if blocked_user:
+            blocked_user.blocked = True
+            blocked_user.blocked_at = int(time.time())
+            if hasattr(blocked_user, 'verification_blocked'):
+                blocked_user.verification_blocked = True
+        else:
+            blocked_user = BlockedUser(user_id=user.id, blocked=True, blocked_at=int(time.time()), verification_blocked=True)
+            db.add(blocked_user)
         db.commit()
         logger.warning(f"User {user.id} permanently blocked due to 10 failed verification attempts")
         
@@ -418,19 +482,19 @@ async def check_math_verification(update: Update, context: ContextTypes.DEFAULT_
     # 如果不是4位数字，显示验证码题目并提示
     if not user_answer or not user_answer.isdigit() or len(user_answer) != 4:
         sent_msg = await message.reply_html(
-            f"🔐 验证码：四位数 <b>{current_challenge}</b> 的每一位数字加上 <b>{current_offset}</b>（超过9取个位数）\n\n"
-            f"⚠️ 请输入4位数字答案\n\n"
-            f"🔐 Verification: Each digit of <b>{current_challenge}</b> plus <b>{current_offset}</b> (if over 9, keep ones digit)\n\n"
-            f"⚠️ Please enter 4-digit answer"
+            f"🔐 请输入验证码\n\n"
+            f"将当前UTC+8时间的 时分（HHMM格式，仅数字）四位数字的每一位数字加上 <b>{current_offset}</b>，超过9则取个位数\n\n"
+            f"⏰ 请在1分钟内回复验证码，否则将失效\n\n"
+            f"🔐 Please enter the verification code\n\n"
+            f"Add <b>{current_offset}</b> to each digit of current UTC+8 time in HHMM format (4 digits), if over 9, keep only the ones digit\n\n"
+            f"⏰ Please reply within 1 minute, or the code will expire"
         )
         await delete_message_later(60, sent_msg.chat.id, sent_msg.message_id, context)
         await delete_message_later(5, message.chat.id, message.message_id, context)
         return False
     
-    correct_answer = context.user_data.get("math_verification_answer")
-    
-    # 验证答案
-    if user_answer == correct_answer:
+    # 验证答案（允许±1分钟的时间偏差）
+    if verify_math_answer(user_answer, current_offset):
         # 验证成功
         context.user_data["math_verified"] = True
         context.user_data.pop("math_verification_challenge", None)
@@ -459,8 +523,15 @@ async def check_math_verification(update: Update, context: ContextTypes.DEFAULT_
         # 如果达到上限，永久屏蔽
         if new_total_attempts >= 10:
             # 永久屏蔽用户
-            blocked_user = BlockedUser(user_id=user.id, blocked=True, blocked_at=int(time.time()))
-            db.add(blocked_user)
+            blocked_user = db.query(BlockedUser).filter(BlockedUser.user_id == user.id).first()
+            if blocked_user:
+                blocked_user.blocked = True
+                blocked_user.blocked_at = int(time.time())
+                if hasattr(blocked_user, 'verification_blocked'):
+                    blocked_user.verification_blocked = True
+            else:
+                blocked_user = BlockedUser(user_id=user.id, blocked=True, blocked_at=int(time.time()), verification_blocked=True)
+                db.add(blocked_user)
             db.commit()
             logger.warning(f"User {user.id} permanently blocked due to reaching 10 failed verification attempts")
             
@@ -480,9 +551,13 @@ async def check_math_verification(update: Update, context: ContextTypes.DEFAULT_
         
         sent_msg = await message.reply_html(
             f"❌ 验证失败（{new_total_attempts}/10）\n\n"
-            f"🔐 新验证码：四位数 <b>{challenge['challenge']}</b> 的每一位数字加上 <b>{challenge['offset']}</b>（超过9取个位数）\n\n"
-            f"❌ Failed ({new_total_attempts}/10)\n\n"
-            f"🔐 New code: Each digit of <b>{challenge['challenge']}</b> plus <b>{challenge['offset']}</b> (if over 9, keep ones digit)"
+            f"🔐 请重新输入验证码\n\n"
+            f"将当前UTC+8时间的 时分（HHMM格式，仅数字）四位数字的每一位数字加上 <b>{challenge['offset']}</b>，超过9则取个位数\n\n"
+            f"⏰ 请在1分钟内回复验证码，否则将失效\n\n"
+            f"❌ Verification failed ({new_total_attempts}/10)\n\n"
+            f"🔐 Please re-enter the verification code\n\n"
+            f"Add <b>{challenge['offset']}</b> to each digit of current UTC+8 time in HHMM format (4 digits), if over 9, keep only the ones digit\n\n"
+            f"⏰ Please reply within 1 minute, or the code will expire"
         )
         await delete_message_later(60, sent_msg.chat.id, sent_msg.message_id, context)
         await delete_message_later(5, message.chat.id, message.message_id, context)
@@ -1244,6 +1319,9 @@ async def block(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if blocked_user:
             blocked_user.blocked = True
             blocked_user.blocked_at = int(time.time())
+            # 手动屏蔽时，清除验证码屏蔽标记（如果存在）
+            if hasattr(blocked_user, 'verification_blocked'):
+                blocked_user.verification_blocked = False
         else:
             blocked_user = BlockedUser(user_id=target_user.user_id, blocked=True, blocked_at=int(time.time()))
             db.add(blocked_user)
@@ -1301,6 +1379,9 @@ async def unblock(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # 解除屏蔽
         blocked_user.blocked = False
+        # 清除验证码屏蔽标记（如果存在）
+        if hasattr(blocked_user, 'verification_blocked'):
+            blocked_user.verification_blocked = False
         db.commit()
         
         # 获取用户信息
@@ -1343,8 +1424,10 @@ async def checkblock(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_info = f"@{target_user.username}" if target_user.username else f"ID: {target_user.user_id}"
         
         if blocked_user:
+            is_verification_blocked = getattr(blocked_user, 'verification_blocked', False)
+            status_text = f"已被屏蔽{' (验证码超出限制)' if is_verification_blocked else ''}"
             await message.reply_html(
-                f"🚫 用户 {user_name} ({user_info}) <b>已被屏蔽</b>。",
+                f"🚫 用户 {user_name} ({user_info}) <b>{status_text}</b>。",
                 quote=True
             )
         else:
@@ -1357,23 +1440,64 @@ async def checkblock(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             all_users = db.query(User).all()
             blocked_users = []
+            blocked_user_objects = {}  # 存储 BlockedUser 对象以便后续查询标记
             
             for u in all_users:
                 blocked_user = db.query(BlockedUser).filter(BlockedUser.user_id == u.user_id, BlockedUser.blocked == True).first()
                 if blocked_user:
                     blocked_users.append(u)
+                    blocked_user_objects[u.user_id] = blocked_user
             
             if not blocked_users:
                 await message.reply_html("✅ 当前没有被屏蔽的用户。", quote=True)
                 return
             
-            response_text = f"🚫 <b>被屏蔽用户列表</b> (共 {len(blocked_users)} 人)\n\n"
+            MAX_MESSAGE_LENGTH = 3900  # 留更多余量
+            messages = []
+            current_message = f"🚫 <b>被屏蔽用户列表</b> (共 {len(blocked_users)} 人)\n\n"
+            part_number = 1
+            
             for u in blocked_users:
                 user_name = u.first_name or "未知"
                 user_info = f"@{u.username} | ID: {u.user_id}" if u.username else f"ID: {u.user_id}"
-                response_text += f"• {user_name} ({user_info})\n"
+                blocked_user_obj = blocked_user_objects.get(u.user_id)
+                is_verification_blocked = getattr(blocked_user_obj, 'verification_blocked', False) if blocked_user_obj else False
+                mark = " [验证码超出限制]" if is_verification_blocked else ""
+                user_line = f"• {user_name} ({user_info}){mark}\n"
+                
+                # 处理过长的单行
+                if len(user_line) > MAX_MESSAGE_LENGTH - 100:
+                    max_name_length = 50
+                    truncated_name = user_name[:max_name_length] + "..." if len(user_name) > max_name_length else user_name
+                    user_line = f"• {truncated_name} ({user_info}){mark}\n"
+                
+                # 检查是否需要分段
+                if len(current_message) + len(user_line) > MAX_MESSAGE_LENGTH:
+                    # 确保至少有内容
+                    if len(current_message.split('\n')) > 3:
+                        messages.append(current_message.strip())
+                        part_number += 1
+                        current_message = f"🚫 <b>被屏蔽用户列表</b> (第 {part_number} 部分)\n\n"
+                
+                current_message += user_line
             
-            await message.reply_html(response_text, quote=True)
+            # 添加最后一段
+            if current_message.strip() and len(current_message.split('\n')) > 2:
+                messages.append(current_message.strip())
+            
+            # 如果没有用户
+            if not messages:
+                messages.append("🚫 <b>被屏蔽用户列表</b>\n\n暂无被屏蔽的用户。")
+            
+            # 分段发送，添加延迟避免限流
+            for i, msg in enumerate(messages):
+                try:
+                    await message.reply_html(msg, quote=(i == 0))
+                    # 避免发送太快
+                    if i < len(messages) - 1:
+                        await asyncio.sleep(0.1)
+                except Exception as err:
+                    logger.error(f"发送第 {i + 1} 段消息失败: {err}")
             
         except Exception as e:
             logger.error(f"Failed to list blocked users: {e}", exc_info=True)
@@ -1460,16 +1584,32 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 
 # --- Main Execution ---
 if __name__ == "__main__":
+    logger.info("开始初始化机器人...")
+    
+    # 确保 assets 目录存在
+    os.makedirs("./assets", exist_ok=True)
+    logger.info("✅ Assets 目录检查完成")
+    
     # 使用基于文件的持久化存储用户和聊天数据
-    pickle_persistence = PicklePersistence(filepath=f"./assets/{app_name}.pickle")
+    try:
+        pickle_persistence = PicklePersistence(filepath=f"./assets/{app_name}.pickle")
+        logger.info("✅ Pickle persistence 初始化完成")
+    except Exception as e:
+        logger.error(f"❌ Pickle persistence 初始化失败: {e}", exc_info=True)
+        raise
 
-    application = (
-        ApplicationBuilder()
-        .token(bot_token)
-        .persistence(persistence=pickle_persistence)
-        # .concurrent_updates(True) # 可以考虑开启并发处理更新
-        .build()
-    )
+    try:
+        application = (
+            ApplicationBuilder()
+            .token(bot_token)
+            .persistence(persistence=pickle_persistence)
+            # .concurrent_updates(True) # 可以考虑开启并发处理更新
+            .build()
+        )
+        logger.info("✅ Application builder 初始化完成")
+    except Exception as e:
+        logger.error(f"❌ Application builder 初始化失败: {e}", exc_info=True)
+        raise
 
     # --- 命令处理器 ---
     # start命令可以在私聊和群组中使用
@@ -1525,15 +1665,21 @@ if __name__ == "__main__":
     async def post_init(application):
         """初始化后执行的任务"""
         try:
+            logger.info("正在注册机器人命令...")
             await application.bot.set_my_commands([
                 telegram.BotCommand("start", "启动机器人 / Start the bot")
             ])
             logger.info("✅ 命令注册成功")
         except Exception as e:
-            logger.error(f"❌ 命令注册失败: {e}")
+            logger.error(f"❌ 命令注册失败: {e}", exc_info=True)
     
     application.post_init = post_init
+    logger.info("✅ Handlers 和 post_init 配置完成")
 
     # --- 启动 Bot ---
-    logger.info("Bot starting...")
-    application.run_polling(allowed_updates=Update.ALL_TYPES) # 接收所有类型的更新
+    logger.info("🚀 正在启动 Bot polling...")
+    try:
+        application.run_polling(allowed_updates=Update.ALL_TYPES) # 接收所有类型的更新
+    except Exception as e:
+        logger.error(f"❌ Bot 运行失败: {e}", exc_info=True)
+        raise
