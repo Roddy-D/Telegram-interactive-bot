@@ -18,6 +18,7 @@ from telegram.ext import (
     ContextTypes,
     ConversationHandler,
     MessageHandler,
+    MessageReactionHandler,
     PicklePersistence,
     filters,
 )
@@ -60,7 +61,7 @@ try:
     # 检查字段是否已存在
     result = db.execute(text("PRAGMA table_info(blocked_user)"))
     columns = [row[1] for row in result]
-    
+    
     if 'verification_blocked' not in columns:
         # 添加字段
         db.execute(text("ALTER TABLE blocked_user ADD COLUMN verification_blocked BOOLEAN DEFAULT FALSE"))
@@ -203,7 +204,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     chat = update.effective_chat
     update_user_db(user)
-    
+    
     if user.id in admin_user_ids:
         logger.info(f"{user.first_name}({user.id}) is admin")
         # 为管理员显示命令列表
@@ -215,16 +216,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"<b>/block</b> - 在话题内屏蔽用户\n"
             f"<b>/unblock</b> - 在话题内解除屏蔽或使用 /unblock [用户ID]\n"
             f"<b>/checkblock</b> - 在话题内检查屏蔽状态，在general内列出所有被屏蔽用户\n"
-            f"<b>/del</b> - 在话题内回复消息删除用户侧的消息"
+            f"<b>/del</b> - 在话题内回复消息删除用户侧的消息\n\n"
+            f"<b>同步功能：</b>\n"
+            f"• ✅ Reaction emoji 双向同步已启用"
         )
-        
+        
         # 发送到当前聊天（私聊或群组）
         await context.bot.send_message(
             chat_id=chat.id,
             text=command_list,
             parse_mode='HTML'
         )
-        
+        
         # 如果在私聊中，检查群组配置
         if chat.type == "private":
             try:
@@ -259,7 +262,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data["math_verification_answer"] = challenge['answer']
             context.user_data["math_verification_offset"] = challenge['offset']
             context.user_data["math_verification_attempts"] = 0
-            
+            
             # 发送验证码消息
             await update.message.reply_html(
                 f"👋 {mention_html(user.id, user.full_name)}，欢迎使用！\n\n"
@@ -387,13 +390,13 @@ def generate_math_verification_challenge():
     """生成基于UTC+8时间的验证码挑战"""
     # 获取UTC+8时间的HHMM作为四位数字
     challenge_digits = get_utc8_time_digits(0)
-    
+    
     # 随机生成加数（1-9，避免0没有意义）
     offset = random.randint(1, 9)
-    
+    
     # 计算正确答案
     answer = ''.join([str((int(d) + offset) % 10) for d in challenge_digits])
-    
+    
     return {
         'challenge': challenge_digits,
         'answer': answer,
@@ -408,10 +411,10 @@ def verify_math_answer(user_answer, offset):
     for time_offset in [-1, 0, 1]:
         challenge_digits = get_utc8_time_digits(time_offset)
         correct_answer = ''.join([str((int(d) + offset) % 10) for d in challenge_digits])
-        
+        
         if user_answer == correct_answer:
             return True
-    
+    
     return False
 
 
@@ -424,11 +427,11 @@ async def check_math_verification(update: Update, context: ContextTypes.DEFAULT_
     """
     user = update.effective_user
     message = update.message
-    
+    
     # 如果已经验证通过，直接返回 True，允许转发消息
     if context.user_data.get("math_verified", False):
         return True
-    
+    
     # 检查是否因验证失败而被临时禁言
     if context.user_data.get("math_verification_banned_until", 0) > time.time():
         time_left = int(context.user_data["math_verification_banned_until"] - time.time())
@@ -439,7 +442,7 @@ async def check_math_verification(update: Update, context: ContextTypes.DEFAULT_
         await delete_message_later(10, sent_msg.chat.id, sent_msg.message_id, context)
         await delete_message_later(5, message.chat.id, message.message_id, context)
         return False
-    
+    
     # 检查是否已达到最大尝试次数（10次）
     total_attempts = context.user_data.get("math_verification_attempts", 0)
     if total_attempts >= 10:
@@ -455,7 +458,7 @@ async def check_math_verification(update: Update, context: ContextTypes.DEFAULT_
             db.add(blocked_user)
         db.commit()
         logger.warning(f"User {user.id} permanently blocked due to 10 failed verification attempts")
-        
+        
         sent_msg = await message.reply_html(
             "❌ 验证失败10次，已被永久屏蔽\n"
             "❌ 10 failed attempts, permanently blocked"
@@ -463,7 +466,7 @@ async def check_math_verification(update: Update, context: ContextTypes.DEFAULT_
         await delete_message_later(30, sent_msg.chat.id, sent_msg.message_id, context)
         await delete_message_later(5, message.chat.id, message.message_id, context)
         return False
-    
+    
     # 如果还没有发送验证挑战，生成新的验证码
     if not context.user_data.get("math_verification_challenge"):
         challenge = generate_math_verification_challenge()
@@ -471,14 +474,14 @@ async def check_math_verification(update: Update, context: ContextTypes.DEFAULT_
         context.user_data["math_verification_answer"] = challenge['answer']
         context.user_data["math_verification_offset"] = challenge['offset']
         context.user_data["math_verification_attempts"] = 0
-    
+    
     # 获取当前的验证码信息
     current_challenge = context.user_data.get("math_verification_challenge")
     current_offset = context.user_data.get("math_verification_offset")
-    
+    
     # 用户发送的内容
     user_answer = message.text.strip() if message.text else ""
-    
+    
     # 如果不是4位数字，显示验证码题目并提示
     if not user_answer or not user_answer.isdigit() or len(user_answer) != 4:
         sent_msg = await message.reply_html(
@@ -492,7 +495,7 @@ async def check_math_verification(update: Update, context: ContextTypes.DEFAULT_
         await delete_message_later(60, sent_msg.chat.id, sent_msg.message_id, context)
         await delete_message_later(5, message.chat.id, message.message_id, context)
         return False
-    
+    
     # 验证答案（允许±1分钟的时间偏差）
     if verify_math_answer(user_answer, current_offset):
         # 验证成功
@@ -502,16 +505,16 @@ async def check_math_verification(update: Update, context: ContextTypes.DEFAULT_
         context.user_data.pop("math_verification_offset", None)
         context.user_data.pop("math_verification_attempts", None)
         context.user_data.pop("math_verification_banned_until", None)
-        
+        
         await message.reply_html(
             "✅ 验证成功！\n✅ Verification successful!"
         )
-        
+        
         # 发送欢迎消息（与未启用验证码时的格式完全一致）
         await message.reply_html(
             f"{mention_html(user.id, user.full_name)}：\n\n{welcome_message}"
         )
-        
+        
         # 删除验证码答案消息，因为这不是用户真正想发送的内容
         await delete_message_later(3, message.chat.id, message.message_id, context)
         return False  # 不转发验证码答案，让用户重新发送真正的消息
@@ -519,7 +522,7 @@ async def check_math_verification(update: Update, context: ContextTypes.DEFAULT_
         # 验证失败，增加尝试次数
         new_total_attempts = total_attempts + 1
         context.user_data["math_verification_attempts"] = new_total_attempts
-        
+        
         # 如果达到上限，永久屏蔽
         if new_total_attempts >= 10:
             # 永久屏蔽用户
@@ -534,7 +537,7 @@ async def check_math_verification(update: Update, context: ContextTypes.DEFAULT_
                 db.add(blocked_user)
             db.commit()
             logger.warning(f"User {user.id} permanently blocked due to reaching 10 failed verification attempts")
-            
+            
             sent_msg = await message.reply_html(
                 "❌ 验证失败已达上限（10次），已被永久屏蔽\n"
                 "❌ Maximum attempts reached (10), permanently blocked"
@@ -542,13 +545,13 @@ async def check_math_verification(update: Update, context: ContextTypes.DEFAULT_
             await delete_message_later(30, sent_msg.chat.id, sent_msg.message_id, context)
             await delete_message_later(5, message.chat.id, message.message_id, context)
             return False
-        
+        
         # 重新生成新的验证码
         challenge = generate_math_verification_challenge()
         context.user_data["math_verification_challenge"] = challenge['challenge']
         context.user_data["math_verification_answer"] = challenge['answer']
         context.user_data["math_verification_offset"] = challenge['offset']
-        
+        
         sent_msg = await message.reply_html(
             f"❌ 验证失败（{new_total_attempts}/10）\n\n"
             f"🔐 请重新输入验证码\n\n"
@@ -650,12 +653,12 @@ async def forwarding_message_u2a(update: Update, context: ContextTypes.DEFAULT_T
                 "❌ You have been permanently blocked and cannot send messages."
             )
             return
-        
+        
         # 2. 数学验证码验证 (如果启用，优先于图片验证码)
         if enable_math_verification:
             if not await check_math_verification(update, context):
                 return # 未通过验证则中止
-        
+        
         # 3. 图片人机验证 (如果启用且未启用数学验证)
         elif not disable_captcha:
             if not await check_human(update, context):
@@ -1089,13 +1092,6 @@ async def handle_edited_admin_message(update: Update, context: ContextTypes.DEFA
     user_chat_msg_id = msg_map.user_chat_message_id
     user_id = msg_map.user_id # 从映射记录获取目标用户 ID
 
-    # 检查话题状态 (可选，管理员可能希望编辑关闭话题中的消息)
-    # f_status = db.query(FormnStatus).filter(FormnStatus.message_thread_id == message_thread_id).first()
-    # if f_status and f_status.status == "closed":
-    #     logger.info(f"Topic {message_thread_id} is closed. Skipping admin edit sync.")
-    #     # await edited_msg.reply_html("提醒：话题已关闭，编辑可能不会同步给用户。", quote=True)
-    #     return
-
     try:
         if edited_msg.text is not None:
             await context.bot.edit_message_text(
@@ -1121,12 +1117,98 @@ async def handle_edited_admin_message(update: Update, context: ContextTypes.DEFA
              logger.debug(f"同步管理员编辑 group_msg({edited_msg_id}) 到 user_msg({user_chat_msg_id}) 时消息无变化。")
         elif "bot was blocked by the user" in str(e) or "user is deactivated" in str(e) or "chat not found" in str(e).lower():
              logger.warning(f"同步管理员编辑 group_msg({edited_msg_id}) 到 user_msg({user_chat_msg_id}) 失败: 用户可能已拉黑或停用。")
-             # 可以考虑通知管理员
-             # await edited_msg.reply_html(f"⚠️ 无法向用户 {user_id} 同步编辑：用户可能已拉黑或停用。", quote=True)
         else:
              logger.warning(f"同步管理员编辑 group_msg({edited_msg_id}) 到 user_msg({user_chat_msg_id}) 失败: {e}")
     except Exception as e:
         logger.error(f"同步管理员编辑 group_msg({edited_msg_id}) 到 user_msg({user_chat_msg_id}) 时发生意外错误: {e}", exc_info=True)
+
+
+# --- 新增：处理 Reaction 双向同步 ---
+async def handle_message_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    处理 message_reaction 更新，实现 reaction 双向同步。
+    - 用户在私聊中对消息点 reaction → 同步到管理群组对应消息
+    - 管理员在管理群组中对消息点 reaction → 同步到用户私聊对应消息
+    """
+    reaction_update = update.message_reaction
+    if not reaction_update:
+        return
+
+    chat = reaction_update.chat
+    message_id = reaction_update.message_id
+    new_reaction = reaction_update.new_reaction or []
+    reaction_user = reaction_update.user
+
+    logger.debug(f"🔄 Reaction update: chat={chat.id}, msg={message_id}, new_reaction={new_reaction}, user={reaction_user.id if reaction_user else 'unknown'}")
+
+    try:
+        if chat.type == "private":
+            # ======== 用户 -> 管理员方向 ========
+            # 用户在私聊中对消息点了 reaction，同步到管理群组对应的消息
+            msg_map = db.query(MessageMap).filter(
+                MessageMap.user_chat_message_id == message_id
+            ).first()
+
+            if not msg_map or not msg_map.group_chat_message_id:
+                logger.debug(f"⚠️ No u2a mapping found for reaction on user message {message_id}")
+                return
+
+            # 过滤掉 paid reaction（bot 不能使用付费 reaction）
+            filtered_reaction = [r for r in new_reaction if r.type != "paid"]
+
+            # Bot 作为非 Premium 用户只能设置最多1个 reaction
+            # 取最新的一个（列表最后一个），如果为空则清除 reaction
+            reaction_to_set = [filtered_reaction[-1]] if filtered_reaction else []
+
+            try:
+                await context.bot.set_message_reaction(
+                    chat_id=admin_group_id,
+                    message_id=msg_map.group_chat_message_id,
+                    reaction=reaction_to_set,
+                )
+                logger.info(f"✅ Synced reaction u2a: user msg({message_id}) -> group msg({msg_map.group_chat_message_id})")
+            except BadRequest as e:
+                logger.warning(f"❌ Failed to sync reaction u2a: {e}")
+            except Exception as e:
+                logger.error(f"❌ Unexpected error syncing reaction u2a: {e}", exc_info=True)
+
+        elif chat.id == admin_group_id:
+            # ======== 管理员 -> 用户方向 ========
+            # 管理员在管理群组中对消息点了 reaction，同步到用户私聊对应的消息
+
+            # 忽略 bot 自己触发的 reaction 更新（防止循环）
+            if reaction_user and reaction_user.is_bot:
+                logger.debug(f"⏭️ Ignoring bot's own reaction update")
+                return
+
+            msg_map = db.query(MessageMap).filter(
+                MessageMap.group_chat_message_id == message_id
+            ).first()
+
+            if not msg_map or not msg_map.user_chat_message_id or not msg_map.user_id:
+                logger.debug(f"⚠️ No a2u mapping found for reaction on group message {message_id}")
+                return
+
+            target_user_id = msg_map.user_id
+
+            # 过滤掉 paid reaction
+            filtered_reaction = [r for r in new_reaction if r.type != "paid"]
+            reaction_to_set = [filtered_reaction[-1]] if filtered_reaction else []
+
+            try:
+                await context.bot.set_message_reaction(
+                    chat_id=target_user_id,
+                    message_id=msg_map.user_chat_message_id,
+                    reaction=reaction_to_set,
+                )
+                logger.info(f"✅ Synced reaction a2u: group msg({message_id}) -> user({target_user_id}) msg({msg_map.user_chat_message_id})")
+            except BadRequest as e:
+                logger.warning(f"❌ Failed to sync reaction a2u: {e}")
+            except Exception as e:
+                logger.error(f"❌ Unexpected error syncing reaction a2u: {e}", exc_info=True)
+
+    except Exception as e:
+        logger.error(f"❌ Error handling message reaction: {e}", exc_info=True)
 
 
 # 清理话题 (clear 命令)
@@ -1163,8 +1245,6 @@ async def clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
             db.add(target_user)
         # 提交更改
         db.commit()
-        # 可选：发送一个确认消息到 General (如果 General 可用)
-        # await context.bot.send_message(admin_group_id, f"管理员 {mention_html(user.id, user.full_name)} 清除了话题 {message_thread_id}", parse_mode='HTML')
 
     except BadRequest as e:
         logger.error(f"Failed to delete topic {message_thread_id} by admin {user.id}: {e}")
@@ -1200,11 +1280,8 @@ async def clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         deleted_count += len(batch)
                     else:
                         logger.warning(f"Failed to delete a batch of messages for user {target_user.user_id}.")
-                        # 可以尝试逐条删除作为后备，但会很慢
                 except BadRequest as e:
                      logger.warning(f"Error deleting messages batch for user {target_user.user_id}: {e}")
-                     # 如果是 "Message ids must be unique"，说明列表有重复，需要去重
-                     # 如果是 "Message can't be deleted"，可能是消息太旧或权限问题
                 except Exception as e:
                      logger.error(f"Unexpected error deleting messages for user {target_user.user_id}: {e}", exc_info=True)
 
@@ -1238,7 +1315,6 @@ async def _broadcast(context: ContextTypes.DEFAULT_TYPE):
 
     for u in users:
         try:
-            # 使用 copy_message 更灵活，允许添加按钮等
             await context.bot.copy_message(
                 chat_id=u.user_id,
                 from_chat_id=chat_id,
@@ -1250,7 +1326,6 @@ async def _broadcast(context: ContextTypes.DEFAULT_TYPE):
             if "bot was blocked by the user" in str(e) or "user is deactivated" in str(e):
                 block_or_deactivated += 1
                 logger.debug(f"Broadcast failed to user {u.user_id}: Blocked or deactivated.")
-                # 可选：将这些用户标记为非活跃
             else:
                 failed += 1
                 logger.warning(f"Broadcast failed to user {u.user_id}: {e}")
@@ -1259,10 +1334,6 @@ async def _broadcast(context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Unexpected error broadcasting to user {u.user_id}: {e}", exc_info=True)
 
     logger.info(f"Broadcast finished. Success: {success}, Failed: {failed}, Blocked/Deactivated: {block_or_deactivated}")
-    # 可以考虑通知发起广播的管理员结果
-    # originator_admin_id = context.job.context.get('admin_id') # 需要在 run_once 时传入
-    # if originator_admin_id:
-    #     await context.bot.send_message(originator_admin_id, f"广播完成：成功 {success}，失败 {failed}，屏蔽/停用 {block_or_deactivated}")
 
 
 # 广播命令 (保持不变)
@@ -1286,7 +1357,6 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         when=timedelta(seconds=1), # 延迟1秒开始执行
         data=job_data,
         name=f"broadcast_{broadcast_message.id}"
-        # context={"admin_id": user.id} # 如果需要在 _broadcast 回调中知道是谁发起的
     )
     await update.message.reply_html(f"📢 广播任务已计划执行。将广播消息 ID: {broadcast_message.id}")
 
@@ -1295,24 +1365,24 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def block(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     message = update.message
-    
+    
     # 权限检查
     if user.id not in admin_user_ids:
         await message.reply_html("你没有权限执行此操作。")
         return
-    
+    
     # 检查是否在话题内
     message_thread_id = message.message_thread_id
     if not message_thread_id:
         await message.reply_html("请到相应话题内使用屏蔽命令。")
         return
-    
+    
     # 查找关联的用户
     target_user = db.query(User).filter(User.message_thread_id == message_thread_id).first()
     if not target_user:
         await message.reply_html("❌ 找不到与此话题关联的用户。")
         return
-    
+    
     try:
         # 屏蔽用户
         blocked_user = db.query(BlockedUser).filter(BlockedUser.user_id == target_user.user_id).first()
@@ -1326,7 +1396,7 @@ async def block(update: Update, context: ContextTypes.DEFAULT_TYPE):
             blocked_user = BlockedUser(user_id=target_user.user_id, blocked=True, blocked_at=int(time.time()))
             db.add(blocked_user)
         db.commit()
-        
+        
         user_name = target_user.first_name or "未知"
         user_info = f"@{target_user.username}" if target_user.username else f"ID: {target_user.user_id}"
         await message.reply_html(
@@ -1334,7 +1404,7 @@ async def block(update: Update, context: ContextTypes.DEFAULT_TYPE):
             quote=True
         )
         logger.info(f"Admin {user.id} blocked user {target_user.user_id}")
-        
+        
     except Exception as e:
         logger.error(f"Failed to block user in topic {message_thread_id}: {e}", exc_info=True)
         await message.reply_html(f"屏蔽用户失败: {e}", quote=True)
@@ -1344,15 +1414,15 @@ async def block(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def unblock(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     message = update.message
-    
+    
     # 权限检查
     if user.id not in admin_user_ids:
         await message.reply_html("你没有权限执行此操作。")
         return
-    
+    
     message_thread_id = message.message_thread_id
     target_user_id = None
-    
+    
     # 检查是否提供了用户ID参数
     if context.args and len(context.args) > 0:
         try:
@@ -1365,35 +1435,35 @@ async def unblock(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target_user = db.query(User).filter(User.message_thread_id == message_thread_id).first()
         if target_user:
             target_user_id = target_user.user_id
-    
+    
     if not target_user_id:
         await message.reply_html("请在话题内使用此命令，或使用格式：/unblock [用户ID]")
         return
-    
+    
     try:
         # 查找被屏蔽的用户
         blocked_user = db.query(BlockedUser).filter(BlockedUser.user_id == target_user_id).first()
         if not blocked_user or not blocked_user.blocked:
             await message.reply_html("❌ 该用户未被屏蔽。", quote=True)
             return
-        
+        
         # 解除屏蔽
         blocked_user.blocked = False
         # 清除验证码屏蔽标记（如果存在）
         if hasattr(blocked_user, 'verification_blocked'):
             blocked_user.verification_blocked = False
         db.commit()
-        
+        
         # 获取用户信息
         target_user = db.query(User).filter(User.user_id == target_user_id).first()
         user_name = target_user.first_name if target_user else "未知"
-        
+        
         await message.reply_html(
             f"✅ 用户 {target_user_id} ({user_name}) 已解除屏蔽。",
             quote=True
         )
         logger.info(f"Admin {user.id} unblocked user {target_user_id}")
-        
+        
     except Exception as e:
         logger.error(f"Failed to unblock user {target_user_id}: {e}", exc_info=True)
         await message.reply_html(f"解除屏蔽失败: {e}", quote=True)
@@ -1404,25 +1474,25 @@ async def checkblock(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     message = update.message
     chat = update.effective_chat
-    
+    
     # 权限检查
     if user.id not in admin_user_ids:
         await message.reply_html("你没有权限执行此操作。")
         return
-    
+    
     message_thread_id = message.message_thread_id
-    
+    
     # 如果在话题内，检查该话题用户的屏蔽状态
     if message_thread_id and chat.id == admin_group_id:
         target_user = db.query(User).filter(User.message_thread_id == message_thread_id).first()
         if not target_user:
             await message.reply_html("❌ 找不到与此话题关联的用户。")
             return
-        
+        
         blocked_user = db.query(BlockedUser).filter(BlockedUser.user_id == target_user.user_id, BlockedUser.blocked == True).first()
         user_name = target_user.first_name or "未知"
         user_info = f"@{target_user.username}" if target_user.username else f"ID: {target_user.user_id}"
-        
+        
         if blocked_user:
             is_verification_blocked = getattr(blocked_user, 'verification_blocked', False)
             status_text = f"已被屏蔽{' (验证码超出限制)' if is_verification_blocked else ''}"
@@ -1441,22 +1511,22 @@ async def checkblock(update: Update, context: ContextTypes.DEFAULT_TYPE):
             all_users = db.query(User).all()
             blocked_users = []
             blocked_user_objects = {}  # 存储 BlockedUser 对象以便后续查询标记
-            
+            
             for u in all_users:
                 blocked_user = db.query(BlockedUser).filter(BlockedUser.user_id == u.user_id, BlockedUser.blocked == True).first()
                 if blocked_user:
                     blocked_users.append(u)
                     blocked_user_objects[u.user_id] = blocked_user
-            
+            
             if not blocked_users:
                 await message.reply_html("✅ 当前没有被屏蔽的用户。", quote=True)
                 return
-            
+            
             MAX_MESSAGE_LENGTH = 3900  # 留更多余量
             messages = []
             current_message = f"🚫 <b>被屏蔽用户列表</b> (共 {len(blocked_users)} 人)\n\n"
             part_number = 1
-            
+            
             for u in blocked_users:
                 user_name = u.first_name or "未知"
                 user_info = f"@{u.username} | ID: {u.user_id}" if u.username else f"ID: {u.user_id}"
@@ -1464,13 +1534,13 @@ async def checkblock(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 is_verification_blocked = getattr(blocked_user_obj, 'verification_blocked', False) if blocked_user_obj else False
                 mark = " [验证码超出限制]" if is_verification_blocked else ""
                 user_line = f"• {user_name} ({user_info}){mark}\n"
-                
+                
                 # 处理过长的单行
                 if len(user_line) > MAX_MESSAGE_LENGTH - 100:
                     max_name_length = 50
                     truncated_name = user_name[:max_name_length] + "..." if len(user_name) > max_name_length else user_name
                     user_line = f"• {truncated_name} ({user_info}){mark}\n"
-                
+                
                 # 检查是否需要分段
                 if len(current_message) + len(user_line) > MAX_MESSAGE_LENGTH:
                     # 确保至少有内容
@@ -1478,17 +1548,17 @@ async def checkblock(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         messages.append(current_message.strip())
                         part_number += 1
                         current_message = f"🚫 <b>被屏蔽用户列表</b> (第 {part_number} 部分)\n\n"
-                
+                
                 current_message += user_line
-            
+            
             # 添加最后一段
             if current_message.strip() and len(current_message.split('\n')) > 2:
                 messages.append(current_message.strip())
-            
+            
             # 如果没有用户
             if not messages:
                 messages.append("🚫 <b>被屏蔽用户列表</b>\n\n暂无被屏蔽的用户。")
-            
+            
             # 分段发送，添加延迟避免限流
             for i, msg in enumerate(messages):
                 try:
@@ -1498,7 +1568,7 @@ async def checkblock(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         await asyncio.sleep(0.1)
                 except Exception as err:
                     logger.error(f"发送第 {i + 1} 段消息失败: {err}")
-            
+            
         except Exception as e:
             logger.error(f"Failed to list blocked users: {e}", exc_info=True)
             await message.reply_html(f"查询屏蔽列表失败: {e}", quote=True)
@@ -1508,52 +1578,52 @@ async def checkblock(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def delete_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     message = update.message
-    
+    
     # 权限检查
     if user.id not in admin_user_ids:
         await message.reply_html("你没有权限执行此操作。")
         return
-    
+    
     # 检查是否在话题内
     message_thread_id = message.message_thread_id
     if not message_thread_id:
         await message.reply_html("此命令需要在管理群组的话题内使用。")
         return
-    
+    
     # 检查是否回复了消息
     if not message.reply_to_message:
         await message.reply_html("请回复要删除的消息。")
         return
-    
+    
     # 查找关联的用户
     target_user = db.query(User).filter(User.message_thread_id == message_thread_id).first()
     if not target_user:
         await message.reply_html("❌ 找不到与此话题关联的用户。")
         return
-    
+    
     # 查找消息映射
     admin_message_id = message.reply_to_message.message_id
     msg_map = db.query(MessageMap).filter(MessageMap.group_chat_message_id == admin_message_id).first()
-    
+    
     if not msg_map or not msg_map.user_chat_message_id:
         await message.reply_html("❌ 找不到对应的用户消息。")
         return
-    
+    
     user_message_id = msg_map.user_chat_message_id
-    
+    
     try:
         # 删除用户侧的消息
         await context.bot.delete_message(
             chat_id=target_user.user_id,
             message_id=user_message_id
         )
-        
+        
         # 删除命令消息
         await context.bot.delete_message(
             chat_id=message.chat.id,
             message_id=message.message_id
         )
-        
+        
         # 发送成功提示（回复原消息）
         await context.bot.send_message(
             chat_id=message.chat.id,
@@ -1561,9 +1631,9 @@ async def delete_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             text="✅ 已删除用户侧的消息。",
             reply_to_message_id=admin_message_id
         )
-        
+        
         logger.info(f"Admin {user.id} deleted user message {user_message_id} for user {target_user.user_id}")
-        
+        
     except BadRequest as e:
         logger.warning(f"Failed to delete user message {user_message_id}: {e}")
         await message.reply_html(f"删除消息失败: {e}", quote=True)
@@ -1576,20 +1646,16 @@ async def delete_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     """记录错误日志。"""
     logger.error(f"处理更新时发生异常: {context.error}", exc_info=context.error)
-    # 对于特定类型的常见错误，可以添加更详细的处理或用户提示
-    # 例如： 处理用户在私聊中发送命令（如果未定义）
-    # if isinstance(context.error, CommandInvalid) and isinstance(update, Update) and update.message and update.message.chat.type == ChatType.PRIVATE:
-    #     await update.message.reply_text("未知命令。直接发送消息即可与客服沟通。")
 
 
 # --- Main Execution ---
 if __name__ == "__main__":
     logger.info("开始初始化机器人...")
-    
+    
     # 确保 assets 目录存在
     os.makedirs("./assets", exist_ok=True)
     logger.info("✅ Assets 目录检查完成")
-    
+    
     # 使用基于文件的持久化存储用户和聊天数据
     try:
         pickle_persistence = PicklePersistence(filepath=f"./assets/{app_name}.pickle")
@@ -1653,6 +1719,9 @@ if __name__ == "__main__":
         )
     )
 
+    # --- Reaction 处理器（双向同步）---
+    application.add_handler(MessageReactionHandler(handle_message_reaction))
+
     # --- 回调查询处理器 ---
     application.add_handler(
         CallbackQueryHandler(callback_query_vcode, pattern="^vcode_")
@@ -1672,7 +1741,7 @@ if __name__ == "__main__":
             logger.info("✅ 命令注册成功")
         except Exception as e:
             logger.error(f"❌ 命令注册失败: {e}", exc_info=True)
-    
+    
     application.post_init = post_init
     logger.info("✅ Handlers 和 post_init 配置完成")
 
@@ -1683,3 +1752,4 @@ if __name__ == "__main__":
     except Exception as e:
         logger.error(f"❌ Bot 运行失败: {e}", exc_info=True)
         raise
+
